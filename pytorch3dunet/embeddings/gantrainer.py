@@ -14,7 +14,7 @@ from pytorch3dunet.unet3d.utils import get_logger, get_number_of_learnable_param
     create_lr_scheduler, get_tensorboard_formatter, create_sample_plotter, RunningAverage, save_checkpoint, \
     load_checkpoint
 
-logger = get_logger('WGANTrainer')
+logger = get_logger('GANTrainer')
 
 
 class EmbeddingGANTrainerBuilder:
