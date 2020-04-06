@@ -763,7 +763,7 @@ class AuxContrastiveLoss(_AbstractContrastiveLoss):
         # ignore instance corresponding to 0-label
         self.delta_var = delta_var
         # init auxiliary loss
-        assert aux_loss in ['bce', 'dice', 'lovasz']
+        assert aux_loss in ['bce', 'dice', 'lovasz', 'gan']
         if aux_loss == 'bce':
             self.aux_loss = BCELoss()
         elif aux_loss == 'dice':
