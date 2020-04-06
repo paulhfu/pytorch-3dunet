@@ -897,7 +897,7 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
                                   loss_config['delta'],
                                   loss_config.get('aux_loss_ignore_zero', True),
                                   loss_config.get('model_path', None),
-                                  loss_config.get('D_model_config', None))
+                                  loss_config.get('D_model', None))
     elif name == 'SegEmbLoss':
         return SegEmbLoss(loss_config['delta_var'],
                           loss_config['delta_dist'],
