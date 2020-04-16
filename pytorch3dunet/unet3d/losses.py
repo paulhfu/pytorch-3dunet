@@ -723,33 +723,46 @@ class GANShapePriorLoss(nn.Module):
         super().__init__()
         assert model_path is not None
         assert D_model_config is not None
+
+        # load model
         D = get_model(D_model_config)
+        # send to device
+        D = D.to(torch.device(D_model_config['device']))
+        D.eval()
+
         load_checkpoint(model_path, D, model_key='D_model_state_dict')
-        self.D = D
         # freeze weights
-        for p in self.D.parameters():
+        for p in D.parameters():
             p.requires_grad = False
 
-        if isinstance(self.D, WGANDiscriminator):
-            self.loss = self.WGANLoss()
+        if isinstance(D, WGANDiscriminator):
+            self.loss = self.WGANLoss(D)
         else:
-            self.loss = self.GANLoss()
+            self.loss = self.GANLoss(D)
 
     def forward(self, inst_pmap, inst_mask):
+        # add batch and channel dimensions
+        inst_pmap = inst_pmap.view((1, 1) + inst_pmap.size())
         return self.loss(inst_pmap)
 
     class WGANLoss:
+        def __init__(self, D):
+            self.D = D
+
         def __call__(self, inst_pmap):
-            return -self.D(inst_pmap)
+            with torch.no_grad():
+                return -self.D(inst_pmap)
 
     class GANLoss:
-        def __init__(self):
+        def __init__(self, D):
+            self.D = D
             self.bce_loss = nn.BCELoss()
 
         def __call__(self, inst_pmap):
             real_labels = torch.ones(inst_pmap.size(0), 1).to(inst_pmap.device)
             outputs = self.D(inst_pmap)
-            return self.bce_loss(outputs, real_labels)
+            with torch.no_grad():
+                return self.bce_loss(outputs, real_labels)
 
 
 class AuxContrastiveLoss(_AbstractContrastiveLoss):
