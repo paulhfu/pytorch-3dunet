@@ -750,8 +750,7 @@ class GANShapePriorLoss(nn.Module):
             self.D = D
 
         def __call__(self, inst_pmap):
-            with torch.no_grad():
-                return -self.D(inst_pmap)
+            return -self.D(inst_pmap)
 
     class GANLoss:
         def __init__(self, D):
@@ -761,8 +760,7 @@ class GANShapePriorLoss(nn.Module):
         def __call__(self, inst_pmap):
             real_labels = torch.ones(inst_pmap.size(0), 1).to(inst_pmap.device)
             outputs = self.D(inst_pmap)
-            with torch.no_grad():
-                return self.bce_loss(outputs, real_labels)
+            return self.bce_loss(outputs, real_labels)
 
 
 class AuxContrastiveLoss(_AbstractContrastiveLoss):
