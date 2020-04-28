@@ -622,7 +622,7 @@ class _AbstractContrastiveLoss(nn.Module):
             loss = self.alpha * variance_term + \
                    self.beta * distance_term + \
                    self.gamma * regularization_term + \
-                   self.delta * aux_loss
+                   self.delta * aux_loss.sum()
 
             per_instance_loss += loss
 
