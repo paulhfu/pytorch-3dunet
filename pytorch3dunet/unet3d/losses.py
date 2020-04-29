@@ -657,7 +657,7 @@ class ContrastiveLoss(_AbstractContrastiveLoss):
 
     def auxiliary_loss(self, embeddings, cluster_means, target):
         # no auxiliary loss in the standard ContrastiveLoss
-        return 0.
+        return torch.tensor(0.)
 
 
 class LovaszSoftmaxLoss(nn.Module):
@@ -798,7 +798,7 @@ class AuxContrastiveLoss(_AbstractContrastiveLoss):
     def auxiliary_loss(self, embeddings, cluster_means, target):
         assert embeddings.size()[1:] == target.size()
 
-        per_instance_loss = 0.
+        per_instance_loss = torch.tensor(0.)
         for i, cm in enumerate(cluster_means):
             if i == 0 and self.aux_loss_ignore_zero:
                 # ignore 0-label
