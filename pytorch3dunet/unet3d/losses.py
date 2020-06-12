@@ -750,8 +750,7 @@ class GANShapePriorLoss(nn.Module):
             self.D = D
 
         def __call__(self, inst_pmap):
-            # TODO: double-check the loss
-            return self.D(inst_pmap)
+            return -self.D(inst_pmap)
 
     class GANLoss:
         def __init__(self, D):
