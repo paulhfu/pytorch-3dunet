@@ -13,8 +13,8 @@ import torch
 from PIL import Image
 from sklearn.decomposition import PCA
 
-plt.ioff()
-plt.switch_backend('agg')
+# plt.ioff()
+# plt.switch_backend('agg')
 
 
 def save_checkpoint(state, is_best, checkpoint_dir, logger=None):
@@ -229,13 +229,19 @@ class _TensorboardFormatter:
 
 
 class DefaultTensorboardFormatter(_TensorboardFormatter):
-    def __init__(self, skip_last_target=False, **kwargs):
+    def __init__(self, skip_last_target=False, star_convex_distances=False, **kwargs):
         super().__init__(**kwargs)
         self.skip_last_target = skip_last_target
+        self.star_convex_distances = star_convex_distances
 
     def process_batch(self, name, batch):
         if name == 'targets' and self.skip_last_target:
             batch = batch[:, :-1, ...]
+        if self.star_convex_distances:
+            if name == 'targets':
+                batch = batch[:, [0, 1, -2, -1], ...]
+            if name == 'predictions':
+                batch = batch[:, [0, 1, -1], ...]
 
         tag_template = '{}/batch_{}/channel_{}/slice_{}'
 

@@ -7,6 +7,11 @@ from scipy.ndimage.filters import convolve
 from skimage.filters import gaussian
 from skimage.segmentation import find_boundaries
 from torchvision.transforms import Compose
+import edt
+from affogato.segmentation import compute_mws_segmentation
+import matplotlib.pyplot as plt
+import warnings
+from scipy.ndimage.measurements import find_objects
 
 # WARN: use fixed random state for reproducibility; if you want to randomize on each run seed with `time.time()` e.g.
 GLOBAL_RANDOM_STATE = np.random.RandomState(47)
@@ -354,6 +359,98 @@ class BlobsWithBoundary:
 
         return np.stack(results, axis=0)
 
+
+class StarConvexDistances2d:
+    def __init__(self, n_rays, **kwargs):
+        self.n_rays = n_rays
+        self.ecd = EucledianDistanceTransform()
+
+    def __call__(self, m):
+        from .stardist2d import c_star_dist
+        assert m.ndim == 3
+        assert m.shape[0] == 1
+        m = m.squeeze()
+        dst = c_star_dist(m.astype(np.uint16,copy=False), int(self.n_rays))
+        return np.concatenate((self.ecd(m)[np.newaxis, ...], dst.transpose((2, 0, 1)), m[np.newaxis, ...]), 0)[:, np.newaxis, ...]
+
+def get_3d_points_on_sphere(n_points):
+    ga = (3 - np.sqrt(5)) * np.pi  # golden angle
+
+    # Create a list of golden angle increments along tha range of number of points
+    theta = ga * np.arange(n_points)
+
+    # Z is a split into a range of -1 to 1 in order to create a unit circle
+    z = np.linspace(1 / n_points - 1, 1 - 1 / n_points, n_points)
+
+    # a list of the radii at each height step of the unit circle
+    radius = np.sqrt(1 - z * z)
+
+    # Determine where xy fall on the sphere, given the azimuthal and polar angles
+    y = radius * np.sin(theta)
+    x = radius * np.cos(theta)
+
+    # Display points in a scatter plot
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111, projection='3d')
+    # ax.scatter(x, y, z)
+    # plt.show()
+    return z, y, x
+
+
+class StarConvexDistances3d:
+    def __init__(self, n_rays, **kwargs):
+        self.n_rays = n_rays
+        self.ecd = EucledianDistanceTransform()
+        self.rays = get_3d_points_on_sphere(n_rays)
+
+    def __call__(self, m):
+        from .stardist3d import c_star_dist3d
+        assert False
+        dz, dy, dx = self.rays
+        grid=(1,1,1)
+        dst = c_star_dist3d(m.astype(np.uint16, copy=False),
+                         dz.astype(np.float32, copy=False),
+                         dy.astype(np.float32, copy=False),
+                         dx.astype(np.float32, copy=False),
+                         int(self.n_rays), *tuple(int(a) for a in grid))
+
+        return np.concatenate((self.ecd(m)[np.newaxis, ...], dst.transpose((2, 0, 1))), 0)[:, np.newaxis, ...]
+
+class EucledianDistanceTransform:
+    def __init__(self, **kwargs):
+        pass
+
+    def __call__(self, m):
+        """Perform EDT on each labeled object and normalize."""
+        lbl_img = m.astype(np.uint16, copy=False)
+        def grow(sl, interior):
+            return tuple(slice(s.start - int(w[0]), s.stop + int(w[1])) for s, w in zip(sl, interior))
+
+        def shrink(interior):
+            return tuple(slice(int(w[0]), (-1 if w[1] else None)) for w in interior)
+
+        constant_img = lbl_img.min() == lbl_img.max() and lbl_img.flat[0] > 0
+        if constant_img:
+            lbl_img = np.pad(lbl_img, ((1, 1),) * lbl_img.ndim, mode='constant')
+            warnings.warn("EDT of constant label image is ill-defined. (Assuming background around it.)")
+        objects = find_objects(lbl_img)
+        prob = np.zeros(lbl_img.shape, np.float32)
+        for i, sl in enumerate(objects, 1):
+            # i: object label id, sl: slices of object in lbl_img
+            if sl is None: continue
+            interior = [(s.start > 0, s.stop < sz) for s, sz in zip(sl, lbl_img.shape)]
+            # 1. grow object slice by 1 for all interior object bounding boxes
+            # 2. perform (correct) EDT for object with label id i
+            # 3. extract EDT for object of original slice and normalize
+            # 4. store edt for object only for pixels of given label id i
+            shrink_slice = shrink(interior)
+            grown_mask = lbl_img[grow(sl, interior)] == i
+            mask = grown_mask[shrink_slice]
+            transform = edt.edt(grown_mask, black_border=False)[shrink_slice][mask]
+            prob[sl][mask] = transform / (np.max(transform) + 1e-10)
+        if constant_img:
+            prob = prob[(slice(1, -1),) * m.ndim].copy()
+        return prob
 
 class BlobsToMask:
     """

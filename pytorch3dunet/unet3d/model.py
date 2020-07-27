@@ -1,6 +1,7 @@
 import importlib
 
 import torch.nn as nn
+import torch
 
 from pytorch3dunet.unet3d.buildingblocks import Encoder, Decoder, DoubleConv, ExtResNetBlock
 from pytorch3dunet.unet3d.utils import number_of_features_per_level

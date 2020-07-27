@@ -13,6 +13,10 @@ from pytorch3dunet.unet3d.losses import compute_per_channel_dice
 from pytorch3dunet.unet3d.seg_metrics import AveragePrecision, Accuracy
 from pytorch3dunet.unet3d.utils import get_logger, expand_as_one_hot, plot_segm, convert_to_numpy
 
+import matplotlib.pyplot as plt
+from matplotlib import cm
+from affogato.segmentation import compute_mws_segmentation
+
 logger = get_logger('EvalMetric')
 
 
@@ -303,6 +307,79 @@ class EmbeddingsAdaptedRandError(AdaptedRandError):
         segm[segm == -1] = noise_label
 
         return np.expand_dims(segm, axis=0)
+
+
+class StardistAffinityAdaptedRandError2D(AdaptedRandError):
+    def __init__(self, threshold=0.3, offsets=[1, 2, 4], sigmoid_flatness=3, const_attr_aff=0.05,save_plots=False, plots_dir='.', **kwargs):
+        super().__init__(save_plots=save_plots, plots_dir=plots_dir, **kwargs)
+        self.sigm_flatness = sigmoid_flatness
+        self.thresh = threshold
+        self.off_lns = offsets
+        self.val_attr_affs = const_attr_aff
+
+    def _get_offsets_from_directions(self, dirs):
+        offs = np.empty((len(self.off_lns), len(dirs), 2), dtype=np.int)
+        for idx1, stride in  enumerate(self.off_lns):
+            for idx2, dir in enumerate(dirs):
+                offs[idx1, idx2, 0] = round(stride * np.sin(dir))  # row coordinate
+                offs[idx1, idx2, 1] = round(stride * np.cos(dir))  # col coordinate
+        return offs
+
+    def _cstm_sigmoid(self, x):
+        return 1/(1 + np.exp(-x/self.sigm_flatness))
+
+    def _get_affinites_from_stardist(self, probas, stardist):
+        repulsive = np.zeros((len(self.off_lns) - 1,) + stardist.shape, dtype=np.float)
+        attractive = np.ones((1, ) + stardist.shape, dtype=np.float) * self.val_attr_affs
+
+        proba_mask = probas >= self.thresh
+        interest_ind = np.nonzero(proba_mask)
+
+        for i, off_len in enumerate(self.off_lns):
+            prob = self._cstm_sigmoid(stardist[:, interest_ind[0], interest_ind[1]] - off_len)
+            if i == 0:
+                attractive[i][:, interest_ind[0], interest_ind[1]] = prob
+            else:
+                repulsive[i-1][:, interest_ind[0], interest_ind[1]] = 1 - prob
+        return attractive, repulsive
+
+    def _set_bg_to0(self, seg):
+        row_seg = seg[seg.shape[0]//2, :]
+        ids = np.unique(row_seg)
+        masses = np.empty(len(ids), dtype=np.int)
+        for i, id in enumerate(ids):
+            masses[i] = (row_seg == id).sum()
+        bg_id = ids[masses.argmax()]
+
+        new_seg = seg.copy()
+        new_seg[seg == bg_id] = 0
+        new_seg[seg == 0] = bg_id
+        return new_seg
+
+    def _get_labels(self, probas, distances, directions):
+        offs = self._get_offsets_from_directions(directions)
+        # offs = np.concatenate((offs[0][np.newaxis, ...], offs), 0)
+        attractive, repulsive = self._get_affinites_from_stardist(probas, distances)
+
+        seperating_channel = attractive.shape[0] * attractive.shape[1]
+        affs = np.concatenate((attractive, repulsive), 0)
+        affs = affs.reshape((affs.shape[0] * affs.shape[1], affs.shape[2], affs.shape[3]))
+        offs = offs.reshape((offs.shape[0] * offs.shape[1], offs.shape[2]))
+
+        seg = compute_mws_segmentation(affs, offs, seperating_channel)
+
+        seg = self._set_bg_to0(seg - 1)
+
+        return seg
+
+    def input_to_segm(self, input):
+        probs = input[0, ...].squeeze()
+        distances = input[1:, ...].squeeze()
+        directions = np.linspace(0, 2 * np.pi, distances.shape[0], endpoint=False)
+
+        segm = self._get_labels(probs, distances, directions)
+
+        return segm[np.newaxis, np.newaxis, ...]
 
 
 # Just for completeness, however sklean MeanShift implementation is just too slow for clustering embeddings

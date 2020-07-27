@@ -261,6 +261,9 @@ class UNet3DTrainer:
                 # the evaluation metric will be incorrectly computed
                 if hasattr(self.model, 'final_activation') and self.model.final_activation is not None:
                     output = self.model.final_activation(output)
+                if hasattr(self.tensorboard_formatter, 'star_convex_distances') and self.tensorboard_formatter.star_convex_distances:
+                    output[:, 0, ...] = torch.sigmoid(output[:, 0, ...])
+
 
                 if i % 100 == 0:
                     self._log_images(input, target, output, 'val_')
