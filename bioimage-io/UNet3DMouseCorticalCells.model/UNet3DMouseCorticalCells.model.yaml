@@ -1,5 +1,5 @@
-name: 3D UNet Dense Nuclei
-description: A 3d U-Net trained to predict nuclei and inner nuclei boundaries of in-vivo 2 photon z-stacks of Histone-GFP labelled cell nuclei in mouse brain.
+name: 3D UNet Mouse Brain Histone-GFP Nuclei
+description: A 3d U-Net trained to predict nuclei and inner nuclei boundaries of in-vivo 2 photon z-stacks of Histone-GFP labelled cell nuclei in mouse brains.
 cite:
   - text: "Livia  Asan et al. Grey matter volume changes and corresponding cellular metrics identified in a longitudinal in vivo imaging approach. BioRxiv preprint."
     doi: https://doi.org/10.1101/559765
@@ -13,7 +13,7 @@ framework: pytorch
 
 source: pytorch3dunet.unet3d.model.UNet3D
 optional_kwargs:
-  name: UNet3D_nuclei_dense
+  name: 3D UNet Mouse Brain Histone-GFP Nuclei
   # number of input channels to the model
   in_channels: 1
   # number of output channels: segmentation mask, 'thick' boundaries, 'inner' boundaries, 'outer' boundaries
