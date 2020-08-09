@@ -66,7 +66,7 @@ prediction:
       kwargs: {apply_to: [0]}
   weights:
     source: best_model_state_dict.pth
-    hash: {md5: dc65136736acadf89cac84f88cd034f6}
+    hash: {md5: b843d46937a512ade5b5a2ec0678a59a}
   postprocess:
     - spec: https://github.com/bioimage-io/pytorch-bioimage-io/blob/f71b8ac598267de88cd39e5495abd93dcda1d0a4/specs/transformations/Sigmoid.transformation.yaml
     - spec: https://github.com/bioimage-io/pytorch-bioimage-io/blob/f71b8ac598267de88cd39e5495abd93dcda1d0a4/specs/transformations/EnsureNumpy.transformation.yaml
