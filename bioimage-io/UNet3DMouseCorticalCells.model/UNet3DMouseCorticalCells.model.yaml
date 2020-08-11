@@ -13,7 +13,7 @@ framework: pytorch
 
 source: pytorch3dunet.unet3d.model.UNet3D
 optional_kwargs:
-  name: 3D UNet Mouse Brain Histone-GFP Nuclei
+  name: UNet3D
   # number of input channels to the model
   in_channels: 1
   # number of output channels: segmentation mask, 'thick' boundaries, 'inner' boundaries, 'outer' boundaries
@@ -21,7 +21,7 @@ optional_kwargs:
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
   layer_order: gcr
   # initial number of feature maps
-  f_maps: [8, 16, 32]
+  f_maps: 16
   # number of groups in the groupnorm
   num_groups: 8
   # apply element-wise nn.Sigmoid after the final 1x1x1 convolution, otherwise apply nn.Softmax
