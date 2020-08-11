@@ -21,7 +21,7 @@ optional_kwargs:
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
   layer_order: gcr
   # initial number of feature maps
-  f_maps: 16
+  f_maps: [8, 16, 32]
   # number of groups in the groupnorm
   num_groups: 8
   # apply element-wise nn.Sigmoid after the final 1x1x1 convolution, otherwise apply nn.Softmax
@@ -38,16 +38,7 @@ inputs:
     shape: [1, 1, 20, 280, 280]
 
 outputs:
-  - name: nuclei_predictions
-    axes: bczyx
-    data_type: float32
-    data_range: [0, 1]
-    halo: [0, 0, 8, 16, 16]
-    shape:
-        reference_input: raw
-        scale: [1, 1, 1, 1, 1]
-        offset: [0, 0, 0, 0, 0]
-  - name: boundary_predictions
+  - name: predictions
     axes: bczyx
     data_type: float32
     data_range: [0, 1]
