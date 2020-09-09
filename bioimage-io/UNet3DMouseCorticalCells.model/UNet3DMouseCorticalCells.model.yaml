@@ -3,6 +3,8 @@ description: A 3d U-Net trained to predict nuclei and inner nuclei boundaries of
 cite:
   - text: "Livia  Asan et al. Grey matter volume changes and corresponding cellular metrics identified in a longitudinal in vivo imaging approach. BioRxiv preprint."
     doi: https://doi.org/10.1101/559765
+authors:
+  - Livia Asan; Claudia Falfan-Melgoza; Wolfgang Weber-Fahr; Carlo Beretta; Thomas Kuner; Johannes Knabbe
 documentation: ../../README.md
 tags: [unet3d, pytorch, cell nuclei, segmentation, nuclei boundary]
 license: MIT
