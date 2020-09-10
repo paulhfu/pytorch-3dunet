@@ -32,7 +32,7 @@ optional_kwargs:
   final_sigmoid: true
   is_segmentation: true
 
-covers: [raw_pred_example.png]
+covers: [raw_pred_example.png, raw_pred_example.png]
 
 inputs:
   - name: raw
