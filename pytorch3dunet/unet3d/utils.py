@@ -239,9 +239,9 @@ class DefaultTensorboardFormatter(_TensorboardFormatter):
             batch = batch[:, :-1, ...]
         if self.star_convex_distances:
             if name == 'targets':
-                batch = batch[:, [0, 1, -2, -1], ...]
+                batch = batch[:, [0, 1, 2, 3, -2, -1], ...]
             if name == 'predictions':
-                batch = batch[:, [0, 1, -1], ...]
+                batch = batch[:, [0, 1, 2, 3, -2, -1], ...]
 
         tag_template = '{}/batch_{}/channel_{}/slice_{}'
 

@@ -5,11 +5,13 @@ import time
 import hdbscan
 import numpy as np
 import torch
+import torch.nn as nn
 from skimage import measure
 from skimage.metrics import adapted_rand_error, peak_signal_noise_ratio
 from sklearn.cluster import MeanShift
 
 from pytorch3dunet.unet3d.losses import compute_per_channel_dice
+from pytorch3dunet.unet3d.losses import DiceLoss, BCEDiceLoss
 from pytorch3dunet.unet3d.seg_metrics import AveragePrecision, Accuracy
 from pytorch3dunet.unet3d.utils import get_logger, expand_as_one_hot, plot_segm, convert_to_numpy
 
@@ -35,6 +37,52 @@ class DiceCoefficient:
     def __call__(self, input, target):
         # Average across channels in order to get the final score
         return torch.mean(compute_per_channel_dice(input, target, epsilon=self.epsilon))
+
+
+class StarDistLoss(nn.Module):
+    """Loss on object probabilities and star-convex desitances as introduced in:
+     https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
+
+    def __init__(self, alpha=1, beta=1, lbd=1, **kwargs):
+        super(StarDistLoss, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.lbd = lbd
+        self.bce_dice = BCEDiceLoss(1, 1)
+        self.mae = nn.L1Loss()
+
+    def __call__(self, input, target):
+        target = target[:, :-1, ...]
+        prob_obj_bnd = self.bce_dice(input[:, 0, ...], target[:, 0, ...])
+        prob_obj = self.bce_dice(input[:, 1:3, ...], target[:, 1:3, ...])
+
+        l_dist = self.mae(input[:, 3:, ...] * target[:, 1, ...].unsqueeze(1), target[:, 3:, ...])
+        reg_dist = (input[:, 3:, ...] * target[:, 2, ...].unsqueeze(1)).abs().mean()
+        return self.alpha * (prob_obj_bnd + prob_obj) / 2 + self.beta * l_dist + self.lbd * reg_dist
+
+
+class StarDistLoss1(nn.Module):
+    """Loss on object probabilities and star-convex desitances as introduced in:
+     https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
+
+    def __init__(self, alpha=1, beta=1, lbd=1, **kwargs):
+        super(StarDistLoss1, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.lbd = lbd
+        self.bce = nn.BCEWithLogitsLoss()
+        self.mae = nn.L1Loss()
+        self.dice = DiceLoss(sigmoid_normalization=False)
+
+    def forward(self, input, target):
+        target = target[:, :-1, ...]
+        prob_obj = self.dice(input[:, 1:3, ...], target[:, 1:3, ...])
+        l_obj = self.bce(input[:, 0, ...], target[:, 0, ...])
+        target_mask = (target[:, 0, ...] != 0).unsqueeze(1).float()
+
+        l_dist = self.mae(input[:, 3:, ...] * torch.sigmoid(target[:, 0, ...].unsqueeze(1)) * target_mask, target[:, 3:, ...] * target_mask)
+        reg_dist = (input[:, 3:, ...] * (target_mask == 0).float()).abs().mean()
+        return self.alpha * (l_obj+prob_obj) + self.beta * l_dist + self.lbd * reg_dist
 
 
 class MeanIoU:
@@ -310,7 +358,7 @@ class EmbeddingsAdaptedRandError(AdaptedRandError):
 
 
 class StardistAffinityAdaptedRandError2D(AdaptedRandError):
-    def __init__(self, threshold=0.3, offsets=[1, 2, 4], sigmoid_flatness=3, const_attr_aff=0.05,save_plots=False, plots_dir='.', **kwargs):
+    def __init__(self, threshold, offsets, sigmoid_flatness, const_attr_aff, save_plots=False, plots_dir='.', **kwargs):
         super().__init__(save_plots=save_plots, plots_dir=plots_dir, **kwargs)
         self.sigm_flatness = sigmoid_flatness
         self.thresh = threshold

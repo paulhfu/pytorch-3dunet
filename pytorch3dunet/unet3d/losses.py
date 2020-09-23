@@ -179,8 +179,29 @@ class StarDistLoss(nn.Module):
         target_mask = (target[:, 0, ...] != 0).unsqueeze(1)
 
         l_dist = self.mae(input[:, 1:, ...] * target_mask.float(), target[:, 1:, ...] * target_mask.float())
-        reg_dist = (input[:, 1:, ...] * (target_mask == False).float()).abs().mean()
+        reg_dist = (input[:, 1:, ...] * (target_mask == 0).float()).abs().mean()
         return self.alpha * l_obj + self.beta * l_dist + self.lbd * reg_dist
+
+class StarDistLoss1(nn.Module):
+    """Loss on object probabilities and star-convex desitances as introduced in:
+     https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
+
+    def __init__(self, alpha, beta, lbd):
+        super(StarDistLoss1, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.lbd = lbd
+        self.bce_dice = BCEDiceLoss(1, 1)
+        self.mae = nn.L1Loss()
+
+    def forward(self, input, target):
+        import matplotlib.pyplot as plt
+        prob_obj_bnd = self.bce_dice(input[:, 0, ...], target[:, 0, ...])
+        prob_obj = self.bce_dice(input[:, 1:3, ...], target[:, 1:3, ...])
+
+        l_dist = self.mae(input[:, 3:, ...]*target[:, 1, ...].unsqueeze(1), target[:, 3:, ...])
+        reg_dist = (input[:, 3:, ...] * target[:, 2, ...].unsqueeze(1)).abs().mean()
+        return self.alpha * (prob_obj_bnd+prob_obj)/2 + self.beta * l_dist + self.lbd * reg_dist
 
 class BCEDiceLoss(nn.Module):
     """Linear combination of BCE and Dice losses"""
@@ -410,6 +431,11 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
         beta = loss_config.get('beta', 1.)
         lbd = loss_config.get('lbd', 1.)
         return StarDistLoss(alpha, beta, lbd)
+    elif name == 'StarDistLoss1':
+        alpha = loss_config.get('alpha', 1.)
+        beta = loss_config.get('beta', 1.)
+        lbd = loss_config.get('lbd', 1.)
+        return StarDistLoss1(alpha, beta, lbd)
     elif name == 'ContrastiveLoss':
         return ContrastiveLoss(loss_config['delta_var'], loss_config['delta_dist'], loss_config['norm'],
                                loss_config['alpha'], loss_config['beta'], loss_config['gamma'])
