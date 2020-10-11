@@ -163,7 +163,7 @@ class GeneralizedDiceLoss(_AbstractDiceLoss):
         return 2 * (intersect.sum() / denominator.sum())
 
 class StarDistLoss(nn.Module):
-    """Loss on object probabilities and star-convex desitances as introduced in:
+    """Loss on object probabilities and star-convex distances as introduced in:
      https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
 
     def __init__(self, alpha, beta, lbd):
@@ -183,7 +183,7 @@ class StarDistLoss(nn.Module):
         return self.alpha * l_obj + self.beta * l_dist + self.lbd * reg_dist
 
 class StarDistLoss1(nn.Module):
-    """Loss on object probabilities and star-convex desitances as introduced in:
+    """Loss on object probabilities and star-convex distances as introduced in:
      https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
 
     def __init__(self, alpha, beta, lbd):
@@ -202,6 +202,118 @@ class StarDistLoss1(nn.Module):
         l_dist = self.mae(input[:, 3:, ...]*target[:, 1, ...].unsqueeze(1), target[:, 3:, ...])
         reg_dist = (input[:, 3:, ...] * target[:, 2, ...].unsqueeze(1)).abs().mean()
         return self.alpha * (prob_obj_bnd+prob_obj)/2 + self.beta * l_dist + self.lbd * reg_dist
+
+
+class StarDistSrAffinitiesLoss(nn.Module):
+    """Loss on object probabilities and star-convex distances as introduced in:
+     https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
+
+    def __init__(self, alpha, beta, lbd):
+        super(StarDistSrAffinitiesLoss, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.lbd = lbd
+        self.bce_dice = BCEDiceLoss(.5, .5)
+        self.bce = nn.BCEWithLogitsLoss()
+
+    def forward(self, input, target):
+        import matplotlib.pyplot as plt
+        fg = (target[:, 0] != 0).unsqueeze(1).float()
+        bg = (target[:, 0] == 0).unsqueeze(1).float()
+
+        prob_obj = self.bce(input[:, 0], target[:, 0])
+        l_affs = self.bce_dice(input[:, 1:3], target[:, 1:3])
+
+        l_dist = (input[:, 3:] * fg - target[:, 3:]).abs().sum() / fg.sum()
+        reg_dist = (input[:, 3:] * bg).abs().sum() / bg.sum()
+
+        return self.alpha * prob_obj + self.beta * (l_dist + reg_dist) / 2 + self.lbd * l_affs
+
+
+class StarDistLossSv(nn.Module):
+    """Loss on object probabilities and star-convex distances as introduced in:
+     https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf
+     and with additional unsupervised loss for stardistances with prior of being linear with  a gradient of -1 in the repective direction ending at a positive value smallter than one"""
+
+    def __init__(self, alpha, beta, lbd):
+        super(StarDistLossSv, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.lbd = lbd
+        self.delta = 0.2
+        self.bce_dice = BCEDiceLoss(1, 1)
+        self.mae = nn.L1Loss()
+        self.shape = torch.Size([0, 0])
+        self.rotation_indices = None
+        self.sd_grad = None
+
+    def _get_indices(self, size, n_rays):
+        import numpy as np
+        from scipy.ndimage import rotate
+        y_dim, x_dim = size
+        indices_y = np.ones(size, dtype=np.float) * np.arange(1, y_dim+1)[:, np.newaxis]
+        indices_x = np.ones(size, dtype=np.float) * np.arange(1, x_dim+1)[np.newaxis, :]
+        indices = np.stack([indices_y, indices_x], axis=-1)
+        diag_len = np.ceil(np.sqrt(y_dim ** 2 + x_dim ** 2)).astype(np.int)
+
+        y_len = diag_len + 4 if (diag_len - y_dim) % 2 == 0 else diag_len + 5
+        x_len = diag_len + 4 if (diag_len - x_dim) % 2 == 0 else diag_len + 5
+        padded_ind = np.zeros((y_len, x_len, 2), dtype=np.float)
+        padded_ind[(y_len-y_dim)//2:(y_len-y_dim)//2+y_dim, (x_len-x_dim)//2:(x_len-x_dim)//2+x_dim, :] = indices
+
+        rot_ind = torch.from_numpy(np.stack([rotate(padded_ind, sd, axes=[0, 1], order=0, reshape=False) for sd in np.linspace(0, 360, n_rays+1)[:-1]], axis=0)).long()
+        return rot_ind
+
+
+    def forward(self, input, target):
+        import matplotlib.pyplot as plt
+
+        input_sv = input[:target.shape[0]]
+        input_usv = input[target.shape[0]:]
+
+        prob_obj_bnd_loss = self.bce_dice(input_sv[:, 0, ...], target[:, 0, ...])
+        prob_obj_loss = self.bce_dice(input_sv[:, 1:3, ...], target[:, 1:3, ...])
+
+        in_usv_sd = input_sv[:, 3:, ...]
+        if self.shape != input_usv.shape[-2:]:
+            self.shape = input_usv.shape[-2:]
+            self.rotation_indices = self._get_indices(self.shape, in_usv_sd.shape[1])
+
+        tgt_p = torch.zeros(in_usv_sd.shape[:-2] + torch.Size([self.shape[0]+1, self.shape[1]+1]))
+        tgt_p[..., 1:, 1:] = target[:, -1].unsqueeze(1)
+        tgt_p = torch.stack([tgt_p[:, i, :, ri[..., 0], ri[..., 1]] for i, ri in enumerate(self.rotation_indices)], dim=1)
+        tgt_pp = torch.zeros(tgt_p.shape[:-1] + torch.Size([tgt_p.shape[-1]+1]))
+        tgt_pp[..., 1:] = tgt_p
+        tgt_b, tgt_a = tgt_pp[..., :-1], tgt_pp[..., 1:]
+        tgt_1 = torch.logical_and(tgt_b != 0, tgt_b != tgt_a).float()
+        tgt_1_p = torch.zeros(tgt_p.shape[:-1] + torch.Size([tgt_p.shape[-1]+1]))
+        tgt_1_p[..., 1:] = tgt_1
+        tgt_b, tgt_a = tgt_1_p[..., :-1], tgt_1_p[..., 1:]
+        tgt_1 = tgt_1 + torch.logical_and(tgt_a != 0, tgt_b != tgt_a).float()*2
+        tgt_1_mask = tgt_1 != 0
+
+        tgt_2_mask = torch.logical_and(tgt_p != 0, tgt_1_mask == 0)
+
+        in_sd_p = torch.zeros(in_usv_sd.shape[:-2] + torch.Size([self.shape[0]+1, self.shape[1]+1]))
+        in_sd_p[..., 1:, 1:] = in_usv_sd
+        in_sd_p = torch.stack([in_sd_p[:, i, :, ri[..., 0], ri[..., 1]] for i, ri in enumerate(self.rotation_indices)], dim=1)
+
+        in_sd_p_sv = in_sd_p[:target.shape[0]]
+
+        loss_1 = (((tgt_1 - in_sd_p_sv)**2) * tgt_1_mask).sum() / tgt_1_mask.sum()
+        loss_2 = torch.clamp(3 - in_sd_p_sv, min=0) * tgt_2_mask
+        loss_2 = loss_2.sum() / (loss_2 != 0).float().sum()
+
+        # calculate the gradient on the rays
+        b, a = input[..., :-1], input[..., 1:]
+        grad_sv = b - a
+
+        # gradient should be one for all non terminal ray points. Hinge to adjust for noise from rotation interpolation
+        loss_3 = (torch.clamp((grad_sv - 1.0)**2 - self.delta, min=0) * (b.data >= 2.0).float()).mean()
+        dst_loss = loss_1 + loss_2 + loss_3
+
+        return self.alpha * dst_loss + self.beta * prob_obj_bnd_loss + self.lbd * prob_obj_bnd_loss
+
 
 class BCEDiceLoss(nn.Module):
     """Linear combination of BCE and Dice losses"""
@@ -431,11 +543,21 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
         beta = loss_config.get('beta', 1.)
         lbd = loss_config.get('lbd', 1.)
         return StarDistLoss(alpha, beta, lbd)
+    elif name == 'StarDistLoss_sv':
+        alpha = loss_config.get('alpha', 1.)
+        beta = loss_config.get('beta', 3.)
+        lbd = loss_config.get('lbd', 1.)
+        return StarDistLossSv(alpha, beta)
     elif name == 'StarDistLoss1':
         alpha = loss_config.get('alpha', 1.)
-        beta = loss_config.get('beta', 1.)
+        beta = loss_config.get('beta', 3.)
         lbd = loss_config.get('lbd', 1.)
         return StarDistLoss1(alpha, beta, lbd)
+    elif name == "StarDistSrAffinitiesLoss":
+        alpha = loss_config.get('alpha', 1.)
+        beta = loss_config.get('beta', 1.)
+        lbd = loss_config.get('lbd', 3.)
+        return StarDistSrAffinitiesLoss(alpha, beta, lbd)
     elif name == 'ContrastiveLoss':
         return ContrastiveLoss(loss_config['delta_var'], loss_config['delta_dist'], loss_config['norm'],
                                loss_config['alpha'], loss_config['beta'], loss_config['gamma'])
@@ -444,3 +566,24 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
                                     apply_below_threshold=loss_config.get('apply_below_threshold', True))
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
+
+if __name__=="__main__":
+    from skimage import data, img_as_float64
+    from pytorch3dunet.augment.transforms import StarConvexDistances2d1, BndFgbgObj, StarConvexDistances2dSrAffinities
+    import h5py
+    import numpy as np
+
+    n_rays = 32
+    img = h5py.File('/g/kreshuk/hilt/projects/work/data/covid/20200619/train/gt_image_008.h5', 'r')['labels/cells/s0'][:]
+    tf1 = StarConvexDistances2dSrAffinities(20)
+    img_dst = tf1(img[np.newaxis, ...])[:-1]
+
+    # img = torch.from_numpy(img_as_float64(data.moon())).unsqueeze(0).unsqueeze(0).unsqueeze(0).float()
+
+    loss = StarDistSrAffinitiesLoss(1, 1, 1)
+
+    tgt = torch.from_numpy(img_dst).unsqueeze(0).float()
+    inp = tgt.clone()
+
+    loss.forward(inp, tgt)
+    a=1

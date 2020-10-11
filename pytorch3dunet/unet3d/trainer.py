@@ -385,3 +385,155 @@ class UNet3DTrainer:
             return input[0].size(0)
         else:
             return input.size(0)
+
+
+class UNet3DTrainerSemiSupervised(UNet3DTrainer):
+    """3D UNet trainer for semi supervised training.
+    """
+
+    def __init__(self, model, optimizer, lr_scheduler, loss_criterion_usv, loss_criterion,
+                 eval_criterion, device, loaders, checkpoint_dir,
+                 max_num_epochs=100, max_num_iterations=1e5,
+                 validate_after_iters=100, log_after_iters=100,
+                 validate_iters=None, num_iterations=1, num_epoch=0,
+                 eval_score_higher_is_better=True, best_eval_score=None,
+                 tensorboard_formatter=None, skip_train_validation=False):
+
+        super(UNet3DTrainerSemiSupervised, self).__init__(model, optimizer, lr_scheduler, loss_criterion,
+                 eval_criterion, device, loaders, checkpoint_dir,
+                 max_num_epochs, max_num_iterations,
+                 validate_after_iters, log_after_iters,
+                 validate_iters, num_iterations, num_epoch,
+                 eval_score_higher_is_better, best_eval_score,
+                 tensorboard_formatter, skip_train_validation)
+
+        self.loss_criterion_usv = loss_criterion_usv
+
+    def fit(self):
+        for _ in range(self.num_epoch, self.max_num_epochs):
+            # train for one epoch
+            should_terminate = self.train(self.loaders['train'])
+
+            if should_terminate:
+                logger.info('Stopping criterion is satisfied. Finishing training')
+                return
+
+            self.num_epoch += 1
+        logger.info(f"Reached maximum number of epochs: {self.max_num_epochs}. Finishing training...")
+
+    def train(self, train_loader_sv, train_loader_usv):
+        """Trains the model for 1 epoch.
+
+        Args:
+            train_loader (torch.utils.data.DataLoader): training data loader
+
+        Returns:
+            True if the training should be terminated immediately, False otherwise
+        """
+        train_losses = utils.RunningAverage()
+        train_eval_scores = utils.RunningAverage()
+
+        # sets the model in training mode
+        self.model.train()
+
+        for i, t in enumerate(train_loader_sv):
+            logger.info(
+                f'Training iteration {self.num_iterations}. Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
+            input_usv, weight_usv = self._split_training_batch(next(train_loader_usv), no_tgt=True)
+            input_sv, target_sv, weight_sv = self._split_training_batch(t)
+
+            output_all, loss = self._forward_pass(torch.cat([input_sv, input_usv], dim=0), target_sv, (weight_sv, weight_usv))
+            output_sv, output_usv = output_all[:input_sv.shape[0]], output_all[input_sv.shape[0]:]
+
+            train_losses.update(loss.item(), self._batch_size(input_sv) + self._batch_size(input_usv))
+
+            # compute gradients and update parameters
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            if self.num_iterations % self.validate_after_iters == 0:
+                # set the model in eval mode
+                self.model.eval()
+                # evaluate on validation set
+                eval_score = self.validate(self.loaders['val'])
+                # set the model back to training mode
+                self.model.train()
+
+                # adjust learning rate if necessary
+                if isinstance(self.scheduler, ReduceLROnPlateau):
+                    self.scheduler.step(eval_score)
+                else:
+                    self.scheduler.step()
+                # log current learning rate in tensorboard
+                self._log_lr()
+                # remember best validation metric
+                is_best = self._is_best_eval_score(eval_score)
+
+                # save checkpoint
+                self._save_checkpoint(is_best)
+
+            if self.num_iterations % self.log_after_iters == 0:
+                # if model contains final_activation layer for normalizing logits apply it, otherwise both
+                # the evaluation metric as well as images in tensorboard will be incorrectly computed
+                if hasattr(self.model, 'final_activation') and self.model.final_activation is not None:
+                    output_sv = self.model.final_activation(output_sv)
+                    output_usv = self.model.final_activation(output_usv)
+
+                # compute eval criterion
+                if not self.skip_train_validation:
+                    eval_score = self.eval_criterion(output_sv, target_sv)
+                    train_eval_scores.update(eval_score.item(), self._batch_size(input_sv))
+
+                # log stats, params and images
+                logger.info(
+                    f'Training stats. Loss: {train_losses.avg}. Evaluation score: {train_eval_scores.avg}')
+                self._log_stats('train', train_losses.avg, train_eval_scores.avg)
+                self._log_params()
+                self._log_images(input_sv, target_sv, output_sv, 'train_sv')
+                self._log_images(input_usv, output_usv, 'train_usv')
+
+            if self.should_stop():
+                return True
+
+            self.num_iterations += 1
+
+        return False
+
+    def _split_training_batch(self, t, no_tgt=False):
+        def _move_to_device(input):
+            if isinstance(input, tuple) or isinstance(input, list):
+                return tuple([_move_to_device(x) for x in input])
+            else:
+                return input.to(self.device)
+
+        t = _move_to_device(t)
+        weight = None
+        if not no_tgt:
+            if len(t) == 2:
+                input, target = t
+            elif len(t) == 3:
+                input, target, weight = t
+            return input, target, weight
+        else:
+            if len(t) == 1:
+                input = t
+            elif len(t) == 2:
+                input, weight = t
+            return input, weight
+
+    # def _forward_pass(self, input_sv, input_usv, target_sv, weight_sv, weight_usv):
+    #     # forward pass
+    #     sep = input_sv.shape[0]
+    #     output = self.model(torch.cat([input_sv, input_usv], dim=0))
+    #
+    #     w_sv = sep / output.shape[0]
+    #     w_usv = input_usv[0] / output.shape[0]
+    #
+    #     # compute the loss
+    #     if weight_sv is None:
+    #         loss = self.loss_criterion(output, target_sv)
+    #     else:
+    #         loss = self.loss_criterion(output, target_sv, weight_sv)
+    #
+    #     return output, loss

@@ -10,7 +10,7 @@ from pytorch3dunet.unet3d.config import load_config
 from pytorch3dunet.unet3d.losses import get_loss_criterion
 from pytorch3dunet.unet3d.metrics import get_evaluation_metric
 from pytorch3dunet.unet3d.model import get_model
-from pytorch3dunet.unet3d.trainer import UNet3DTrainer
+from pytorch3dunet.unet3d.trainer import UNet3DTrainer, UNet3DTrainerSemiSupervised
 from pytorch3dunet.unet3d.utils import get_logger, get_tensorboard_formatter
 from pytorch3dunet.unet3d.utils import get_number_of_learnable_parameters
 
@@ -21,6 +21,9 @@ def _create_trainer(config, model, optimizer, lr_scheduler, loss_criterion, eval
     assert 'trainer' in config, 'Could not find trainer configuration'
     trainer_config = config['trainer']
 
+    if "name" in trainer_config:
+        is_semi_sv = True if trainer_config["name"] == "semi supervised" else False
+
     resume = trainer_config.get('resume', None)
     pre_trained = trainer_config.get('pre_trained', None)
     skip_train_validation = trainer_config.get('skip_train_validation', False)
@@ -28,33 +31,62 @@ def _create_trainer(config, model, optimizer, lr_scheduler, loss_criterion, eval
     # get tensorboard formatter
     tensorboard_formatter = get_tensorboard_formatter(trainer_config.get('tensorboard_formatter', None))
 
-    if resume is not None:
-        # continue training from a given checkpoint
-        return UNet3DTrainer.from_checkpoint(resume, model,
-                                             optimizer, lr_scheduler, loss_criterion,
-                                             eval_criterion, loaders, tensorboard_formatter=tensorboard_formatter)
-    elif pre_trained is not None:
-        # fine-tune a given pre-trained model
-        return UNet3DTrainer.from_pretrained(pre_trained, model, optimizer, lr_scheduler, loss_criterion,
-                                             eval_criterion, device=config['device'], loaders=loaders,
-                                             max_num_epochs=trainer_config['epochs'],
-                                             max_num_iterations=trainer_config['iters'],
-                                             validate_after_iters=trainer_config['validate_after_iters'],
-                                             log_after_iters=trainer_config['log_after_iters'],
-                                             eval_score_higher_is_better=trainer_config['eval_score_higher_is_better'],
-                                             tensorboard_formatter=tensorboard_formatter,
-                                             skip_train_validation=skip_train_validation)
+    if is_semi_sv:
+        if resume is not None:
+            # continue training from a given checkpoint
+            return UNet3DTrainerSemiSupervised.from_checkpoint(resume, model,
+                                                 optimizer, lr_scheduler, loss_criterion,
+                                                 eval_criterion, loaders, tensorboard_formatter=tensorboard_formatter)
+        elif pre_trained is not None:
+            # fine-tune a given pre-trained model
+            return UNet3DTrainerSemiSupervised.from_pretrained(pre_trained, model, optimizer, lr_scheduler, loss_criterion,
+                                                 eval_criterion, device=config['device'], loaders=loaders,
+                                                 max_num_epochs=trainer_config['epochs'],
+                                                 max_num_iterations=trainer_config['iters'],
+                                                 validate_after_iters=trainer_config['validate_after_iters'],
+                                                 log_after_iters=trainer_config['log_after_iters'],
+                                                 eval_score_higher_is_better=trainer_config['eval_score_higher_is_better'],
+                                                 tensorboard_formatter=tensorboard_formatter,
+                                                 skip_train_validation=skip_train_validation)
+        else:
+            # start training from scratch
+            return UNet3DTrainerSemiSupervised(model, optimizer, lr_scheduler, loss_criterion, eval_criterion,
+                                 config['device'], loaders, trainer_config['checkpoint_dir'],
+                                 max_num_epochs=trainer_config['epochs'],
+                                 max_num_iterations=trainer_config['iters'],
+                                 validate_after_iters=trainer_config['validate_after_iters'],
+                                 log_after_iters=trainer_config['log_after_iters'],
+                                 eval_score_higher_is_better=trainer_config['eval_score_higher_is_better'],
+                                 tensorboard_formatter=tensorboard_formatter,
+                                 skip_train_validation=skip_train_validation)
     else:
-        # start training from scratch
-        return UNet3DTrainer(model, optimizer, lr_scheduler, loss_criterion, eval_criterion,
-                             config['device'], loaders, trainer_config['checkpoint_dir'],
-                             max_num_epochs=trainer_config['epochs'],
-                             max_num_iterations=trainer_config['iters'],
-                             validate_after_iters=trainer_config['validate_after_iters'],
-                             log_after_iters=trainer_config['log_after_iters'],
-                             eval_score_higher_is_better=trainer_config['eval_score_higher_is_better'],
-                             tensorboard_formatter=tensorboard_formatter,
-                             skip_train_validation=skip_train_validation)
+        if resume is not None:
+            # continue training from a given checkpoint
+            return UNet3DTrainer.from_checkpoint(resume, model,
+                                                 optimizer, lr_scheduler, loss_criterion,
+                                                 eval_criterion, loaders, tensorboard_formatter=tensorboard_formatter)
+        elif pre_trained is not None:
+            # fine-tune a given pre-trained model
+            return UNet3DTrainer.from_pretrained(pre_trained, model, optimizer, lr_scheduler, loss_criterion,
+                                                 eval_criterion, device=config['device'], loaders=loaders,
+                                                 max_num_epochs=trainer_config['epochs'],
+                                                 max_num_iterations=trainer_config['iters'],
+                                                 validate_after_iters=trainer_config['validate_after_iters'],
+                                                 log_after_iters=trainer_config['log_after_iters'],
+                                                 eval_score_higher_is_better=trainer_config['eval_score_higher_is_better'],
+                                                 tensorboard_formatter=tensorboard_formatter,
+                                                 skip_train_validation=skip_train_validation)
+        else:
+            # start training from scratch
+            return UNet3DTrainer(model, optimizer, lr_scheduler, loss_criterion, eval_criterion,
+                                 config['device'], loaders, trainer_config['checkpoint_dir'],
+                                 max_num_epochs=trainer_config['epochs'],
+                                 max_num_iterations=trainer_config['iters'],
+                                 validate_after_iters=trainer_config['validate_after_iters'],
+                                 log_after_iters=trainer_config['log_after_iters'],
+                                 eval_score_higher_is_better=trainer_config['eval_score_higher_is_better'],
+                                 tensorboard_formatter=tensorboard_formatter,
+                                 skip_train_validation=skip_train_validation)
 
 
 def _create_optimizer(config, model):

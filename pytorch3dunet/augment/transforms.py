@@ -360,6 +360,24 @@ class BlobsWithBoundary:
         return np.stack(results, axis=0)
 
 
+class StarConvexDistances2dSrAffinities:
+    def __init__(self, n_rays, **kwargs):
+        self.n_rays = n_rays
+        self.edt = EucledianDistanceTransform()
+        self.offsets = [[0, 0, 1], [0, 1, 0]]
+
+    def __call__(self, m):
+        from .stardist2d import c_star_dist
+        assert m.ndim == 3
+        assert m.shape[0] == 1
+        aff_tf = LabelToAffinities(offsets=[np.ravel_multi_index(off, m.shape) for off in self.offsets])
+        affs = aff_tf(m)[:2].squeeze(1)
+        # fg_bg = np.concatenate([(m != 0), (m == 0)], 0).astype(np.float)
+        m = m.squeeze(0)
+        dst = c_star_dist(m.astype(np.uint16,copy=False), int(self.n_rays)).transpose((2, 0, 1))
+        return np.concatenate((self.edt(m)[np.newaxis], affs[:2], dst, m[np.newaxis]), 0)[:, np.newaxis]
+
+
 class StarConvexDistances2d1:
     def __init__(self, n_rays, **kwargs):
         self.n_rays = n_rays
@@ -377,11 +395,23 @@ class StarConvexDistances2d1:
         # edt = 2 / self.ecd(m)[np.newaxis, ...]
         return np.concatenate((bnd, fg_bg, dst, m[np.newaxis, ...]), 0)[:, np.newaxis, ...]
 
+class BndFgbgObj:
+    def __init__(self, **kwargs):
+        self.ecd = EucledianDistanceTransform()
+        self.bnd = StandardLabelToBoundary()
+
+    def __call__(self, m):
+        assert m.ndim == 3
+        assert m.shape[0] == 1
+        bnd = self.bnd(m).squeeze(0)
+        m = m.squeeze()
+        fg_bg = np.concatenate([(m[np.newaxis, ...] != 0), (m[np.newaxis, ...] == 0)], 0).astype(np.float)
+        return np.concatenate((bnd, fg_bg, m[np.newaxis, ...]), 0)[:, np.newaxis, ...]
 
 class StarConvexDistances2d:
     def __init__(self, n_rays, **kwargs):
         self.n_rays = n_rays
-        self.ecd = EucledianDistanceTransform()
+        self.edt = EucledianDistanceTransform()
 
     def __call__(self, m):
         from .stardist2d import c_star_dist
@@ -389,7 +419,7 @@ class StarConvexDistances2d:
         assert m.shape[0] == 1
         m = m.squeeze()
         dst = c_star_dist(m.astype(np.uint16,copy=False), int(self.n_rays))
-        return np.concatenate((self.ecd(m)[np.newaxis, ...], dst.transpose((2, 0, 1)), m[np.newaxis, ...]), 0)[:, np.newaxis, ...]
+        return np.concatenate((self.edt(m)[np.newaxis, ...], dst.transpose((2, 0, 1)), m[np.newaxis, ...]), 0)[:, np.newaxis, ...]
 
 def get_3d_points_on_sphere(n_points):
     ga = (3 - np.sqrt(5)) * np.pi  # golden angle
