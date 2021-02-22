@@ -33,7 +33,6 @@ class RandomFlip:
 
     def __call__(self, m):
         assert m.ndim in [3, 4], 'Supports only 3D (DxHxW) or 4D (CxDxHxW) images'
-
         for axis in self.axes:
             if self.random_state.uniform() > self.axis_prob:
                 if m.ndim == 3:
@@ -41,7 +40,6 @@ class RandomFlip:
                 else:
                     channels = [np.flip(m[c], axis) for c in range(m.shape[0])]
                     m = np.stack(channels, axis=0)
-
         return m
 
 
@@ -71,7 +69,6 @@ class RandomRotate90:
         else:
             channels = [np.rot90(m[c], k, self.axis) for c in range(m.shape[0])]
             m = np.stack(channels, axis=0)
-
         return m
 
 
@@ -103,7 +100,6 @@ class RandomRotate:
             channels = [rotate(m[c], angle, axes=axis, reshape=False, order=self.order, mode=self.mode, cval=-1) for c
                         in range(m.shape[0])]
             m = np.stack(channels, axis=0)
-
         return m
 
 
@@ -359,23 +355,68 @@ class BlobsWithBoundary:
 
         return np.stack(results, axis=0)
 
+class NormedEdt:
+    def __init__(self, **kwargs):
+        self.edt = EucledianDistanceTransform()
+
+    def get_obj_norm_factor(self, m, edt):
+        factor_map = np.zeros_like(m, dtype=np.float)
+        lbls = np.unique(m)
+        if 0 in lbls:
+            lbls = lbls[1:]
+        for lbl in lbls:
+            mask = m == lbl
+            factor_map[mask] = 1 / edt[mask].max()
+        return factor_map
+
+    def __call__(self, m):
+        m = m.squeeze(0)
+        edt = self.edt(m)
+        factor_map = self.get_obj_norm_factor(m, edt)
+        norm_center_weights = edt * factor_map
+        return np.concatenate((norm_center_weights[np.newaxis], m[np.newaxis]), 0)[:, np.newaxis]
+
+
+class LrSrAffinities:
+    def __init__(self, offsets, **kwargs):
+        self.offsets = offsets
+
+    def __call__(self, m):
+        assert m.ndim == 3
+        assert m.shape[0] == 1
+        aff_tf = LabelToAffinities(offsets=self.offsets, is_2d=True)
+        affs = aff_tf(m).squeeze(1)
+        return np.concatenate((affs, m), 0)[:, np.newaxis]
+
 
 class StarConvexDistances2dSrAffinities:
     def __init__(self, n_rays, **kwargs):
         self.n_rays = n_rays
         self.edt = EucledianDistanceTransform()
-        self.offsets = [[0, 0, 1], [0, 1, 0]]
+
+    def get_obj_norm_factor(self, m, edt):
+        factor_map = np.zeros_like(m, dtype=np.float)
+        lbls = np.unique(m)
+        if 0 in lbls:
+            lbls = lbls[1:]
+        for lbl in lbls:
+            mask = m == lbl
+            factor_map[mask] = 1 / edt[mask].max()
+        return factor_map
 
     def __call__(self, m):
         from .stardist2d import c_star_dist
         assert m.ndim == 3
         assert m.shape[0] == 1
-        aff_tf = LabelToAffinities(offsets=[np.ravel_multi_index(off, m.shape) for off in self.offsets])
-        affs = aff_tf(m)[:2].squeeze(1)
+        aff_tf = LabelToAffinities(offsets=[1], is_2d=True)
+        affs = aff_tf(m).squeeze(1)
         # fg_bg = np.concatenate([(m != 0), (m == 0)], 0).astype(np.float)
         m = m.squeeze(0)
         dst = c_star_dist(m.astype(np.uint16,copy=False), int(self.n_rays)).transpose((2, 0, 1))
-        return np.concatenate((self.edt(m)[np.newaxis], affs[:2], dst, m[np.newaxis]), 0)[:, np.newaxis]
+        edt = self.edt(m)
+        factor_map = self.get_obj_norm_factor(m, edt)
+        norm_center_weights = edt * factor_map
+        return np.concatenate((norm_center_weights[np.newaxis], affs, dst, m[np.newaxis]), 0)[:, np.newaxis]
 
 
 class StarConvexDistances2d1:
@@ -567,7 +608,7 @@ class LabelToAffinities(AbstractLabelToBoundary):
     One specify the offsets (thickness) of the border. The boundary will be computed via the convolution operator.
     """
 
-    def __init__(self, offsets, ignore_index=None, append_label=False, aggregate_affinities=False, z_offsets=None,
+    def __init__(self, offsets, ignore_index=None, append_label=False, aggregate_affinities=False, z_offsets=None, is_2d=False,
                  **kwargs):
         super().__init__(ignore_index=ignore_index, append_label=append_label,
                          aggregate_affinities=aggregate_affinities)
@@ -575,6 +616,11 @@ class LabelToAffinities(AbstractLabelToBoundary):
         assert isinstance(offsets, list) or isinstance(offsets, tuple), 'offsets must be a list or a tuple'
         assert all(a > 0 for a in offsets), "'offsets must be positive"
         assert len(set(offsets)) == len(offsets), "'offsets' must be unique"
+        if is_2d:
+            self.axes_transpose = self.AXES_TRANSPOSE[:-1]
+        else:
+            self.axes_transpose = self.AXES_TRANSPOSE
+
         if z_offsets is not None:
             assert len(offsets) == len(z_offsets), 'z_offsets length must be the same as the length of offsets'
         else:
@@ -585,7 +631,7 @@ class LabelToAffinities(AbstractLabelToBoundary):
         self.kernels = []
         # create kernel for every axis-offset pair
         for xy_offset, z_offset in zip(offsets, z_offsets):
-            for axis_ind, axis in enumerate(self.AXES_TRANSPOSE):
+            for axis_ind, axis in enumerate(self.axes_transpose):
                 final_offset = xy_offset
                 if axis_ind == 2:
                     final_offset = z_offset
@@ -764,7 +810,6 @@ class ToTensor:
         # add channel dimension
         if self.expand_dims and m.ndim == 3:
             m = np.expand_dims(m, axis=0)
-
         return torch.from_numpy(m.astype(dtype=self.dtype))
 
 

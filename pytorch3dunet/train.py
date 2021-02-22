@@ -23,6 +23,8 @@ def _create_trainer(config, model, optimizer, lr_scheduler, loss_criterion, eval
 
     if "name" in trainer_config:
         is_semi_sv = True if trainer_config["name"] == "semi supervised" else False
+    else:
+        is_semi_sv = False
 
     resume = trainer_config.get('resume', None)
     pre_trained = trainer_config.get('pre_trained', None)

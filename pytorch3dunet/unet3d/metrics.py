@@ -26,18 +26,40 @@ class DiceCoefficient:
     """Computes Dice Coefficient.
     Generalized to multiple channels by computing per-channel Dice Score
     (as described in https://arxiv.org/pdf/1707.03237.pdf) and theTn simply taking the average.
-    Input is expected to be probabilities instead of logits.
     This metric is mostly useful when channels contain the same semantic class (e.g. affinities computed with different offsets).
     DO NOT USE this metric when training with DiceLoss, otherwise the results will be biased towards the loss.
     """
 
-    def __init__(self, epsilon=1e-6, **kwargs):
+    def __init__(self, epsilon=1e-6, skip_last_target=False, is_logits=True, **kwargs):
         self.epsilon = epsilon
+        self.skip_last_target = skip_last_target
+        self.is_logits = is_logits
 
     def __call__(self, input, target):
         # Average across channels in order to get the final score
+        if self.skip_last_target:
+            target = target[:, :-1]
+        if self.is_logits:
+            target = torch.sigmoid(target)
         return torch.mean(compute_per_channel_dice(input, target, epsilon=self.epsilon))
 
+class EdtLoss:
+    """Loss on object probabilities and star-convex distances as introduced in:
+     https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
+
+    def __init__(self, lbd=1, skip_last_target=False, **kwargs):
+        self.lbd = lbd
+        self.skip_last_target = skip_last_target
+        self.mae = nn.L1Loss()
+
+    def __call__(self, input, target):
+        if self.skip_last_target:
+            target = target[:, :-1]
+        input = torch.sigmoid(input)
+        target_mask = target != 0
+        l_dist = self.mae(input * target_mask.float(), target)
+        reg_dist = (input * (target_mask == 0).float()).abs().mean()
+        return l_dist + self.lbd * reg_dist
 
 class StarDistLoss(nn.Module):
     """Loss on object probabilities and star-convex desitances as introduced in:
@@ -83,6 +105,29 @@ class StarDistLoss1(nn.Module):
         l_dist = self.mae(input[:, 3:, ...] * torch.sigmoid(target[:, 0, ...].unsqueeze(1)) * target_mask, target[:, 3:, ...] * target_mask)
         reg_dist = (input[:, 3:, ...] * (target_mask == 0).float()).abs().mean()
         return self.alpha * (l_obj+prob_obj) + self.beta * l_dist + self.lbd * reg_dist
+
+
+class StarDistSrAffinitiesLoss(nn.Module):
+    """Loss on object probabilities and star-convex distances as introduced in:
+     https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
+
+    def __init__(self, beta=1., lbd=1., **kwargs):
+        super(StarDistSrAffinitiesLoss, self).__init__()
+        self.beta = beta
+        self.lbd = lbd
+        self.bce_dice = BCEDiceLoss(.5, .5)
+
+    def forward(self, input, target):
+        target = target[:, :-1, ...]
+        fg = (target[:, 0] != 0).unsqueeze(1).float()
+        bg = (target[:, 0] == 0).unsqueeze(1).float()
+
+        l_affs = self.bce_dice(input[:, :3], target[:, 0:3])
+
+        l_dist = ((input[:, 3:] * fg - target[:, 3:]).abs() * target[:, 0].unsqueeze(1)).sum() / fg.sum()
+        reg_dist = (input[:, 3:] * bg).abs().sum() / bg.sum()
+
+        return self.beta * (l_dist + reg_dist) / 2 + self.lbd * l_affs
 
 
 class MeanIoU:

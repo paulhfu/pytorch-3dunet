@@ -160,7 +160,67 @@ class GeneralizedDiceLoss(_AbstractDiceLoss):
         denominator = (input + target).sum(-1)
         denominator = (denominator * w_l).clamp(min=self.epsilon)
 
-        return 2 * (intersect.sum() / denominator.sum())
+        return 1 - 2 * (intersect.sum() / denominator.sum())
+
+
+class AffinityDiceLoss(nn.Module):
+    """Computes Dice Loss according to https://arxiv.org/pdf/1707.03237.pdf.
+    For multi-class segmentation `weight` parameter can be used to assign different weights per class.
+    The input to the loss function is assumed to be a logit and will be normalized by the Sigmoid function.
+    """
+
+    def __init__(self, weight=None):
+        super(AffinityDiceLoss, self).__init__()
+        self.weight = weight
+        self.epsilon = 1e-6
+
+    def forward(self, input, target):
+        # get probabilities from logits
+        input = torch.sigmoid(input)
+        n_offs = input.shape[1]
+        input = torch.cat((input, 1-input), dim=1)
+        target = torch.cat((target, 1-target), dim=1)
+        return (1 - compute_per_channel_dice(input, target)).mean()
+
+        # input = flatten(input)
+        # target = flatten(target)
+        # target = target.float()
+        #
+        # # GDL weighting: the contribution of each label is corrected by the inverse of its volume
+        # # w_l = target.sum(-1)
+        # # w_l = 1 / (w_l * w_l).clamp(min=self.epsilon)
+        # # w_l.requires_grad = False
+        #
+        # intersect = (input * target).sum(-1)
+        # intersect = intersect
+        # # ot = torch.ones(n_offs, device=input.device)
+        # # weights = torch.cat([self.weight[0] * ot, self.weight[1] * ot]) * w_l
+        # # intersect = intersect * w_l
+        #
+        # denominator = (input + target).sum(-1).clamp(min=self.epsilon)
+        # denominator = (denominator).clamp(min=self.epsilon)
+        #
+        # dice_score = 2 * (intersect.sum() / denominator.sum())
+        #
+        # # average Dice score across all channels/classes
+        # return 1. - dice_score
+
+
+class EdtLoss(nn.Module):
+    """Loss on object probabilities and star-convex distances as introduced in:
+     https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
+
+    def __init__(self, lbd=1):
+        super(EdtLoss, self).__init__()
+        self.lbd = lbd
+        self.mae = nn.L1Loss()
+
+    def forward(self, input, target):
+        input = torch.sigmoid(input)
+        target_mask = target != 0
+        l_dist = self.mae(input * target_mask.float(), target)
+        reg_dist = (input * (target_mask == 0).float()).abs().mean()
+        return l_dist + self.lbd * reg_dist
 
 class StarDistLoss(nn.Module):
     """Loss on object probabilities and star-convex distances as introduced in:
@@ -208,26 +268,23 @@ class StarDistSrAffinitiesLoss(nn.Module):
     """Loss on object probabilities and star-convex distances as introduced in:
      https://openaccess.thecvf.com/content_WACV_2020/papers/Weigert_Star-convex_Polyhedra_for_3D_Object_Detection_and_Segmentation_in_Microscopy_WACV_2020_paper.pdf"""
 
-    def __init__(self, alpha, beta, lbd):
+    def __init__(self, beta, lbd):
         super(StarDistSrAffinitiesLoss, self).__init__()
-        self.alpha = alpha
         self.beta = beta
         self.lbd = lbd
         self.bce_dice = BCEDiceLoss(.5, .5)
-        self.bce = nn.BCEWithLogitsLoss()
 
     def forward(self, input, target):
         import matplotlib.pyplot as plt
         fg = (target[:, 0] != 0).unsqueeze(1).float()
         bg = (target[:, 0] == 0).unsqueeze(1).float()
 
-        prob_obj = self.bce(input[:, 0], target[:, 0])
-        l_affs = self.bce_dice(input[:, 1:3], target[:, 1:3])
+        l_affs = self.bce_dice(input[:, :3], target[:, 0:3])
 
-        l_dist = (input[:, 3:] * fg - target[:, 3:]).abs().sum() / fg.sum()
+        l_dist = ((input[:, 3:] * fg - target[:, 3:]).abs() * target[:, 0].unsqueeze(1)).sum() / fg.sum()
         reg_dist = (input[:, 3:] * bg).abs().sum() / bg.sum()
 
-        return self.alpha * prob_obj + self.beta * (l_dist + reg_dist) / 2 + self.lbd * l_affs
+        return self.beta * (l_dist + reg_dist) / 2 + self.lbd * l_affs
 
 
 class StarDistLossSv(nn.Module):
@@ -538,6 +595,10 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
         return SmoothL1Loss()
     elif name == 'L1Loss':
         return L1Loss()
+    elif name == 'AffinityDiceLoss':
+        return AffinityDiceLoss(weight)
+    elif name == 'EdtLoss':
+        return EdtLoss(weight)
     elif name == 'StarDistLoss':
         alpha = loss_config.get('alpha', 1.)
         beta = loss_config.get('beta', 1.)
@@ -554,10 +615,9 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
         lbd = loss_config.get('lbd', 1.)
         return StarDistLoss1(alpha, beta, lbd)
     elif name == "StarDistSrAffinitiesLoss":
-        alpha = loss_config.get('alpha', 1.)
         beta = loss_config.get('beta', 1.)
-        lbd = loss_config.get('lbd', 3.)
-        return StarDistSrAffinitiesLoss(alpha, beta, lbd)
+        lbd = loss_config.get('lbd', 1.)
+        return StarDistSrAffinitiesLoss(beta, lbd)
     elif name == 'ContrastiveLoss':
         return ContrastiveLoss(loss_config['delta_var'], loss_config['delta_dist'], loss_config['norm'],
                                loss_config['alpha'], loss_config['beta'], loss_config['gamma'])
